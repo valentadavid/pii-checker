@@ -15,7 +15,7 @@ Not every column is worth sending to an LLM. Variables that are unlikely to be P
 - **Name/label always-include patterns**: a column is always sent, regardless of its data type or values, if its name or label matches a fixed set of sensitive-topic patterns — age, birth date/DOB, ethnicity, race, religion, disability, etc., in English and Spanish.
 - **Platform participant ID patterns**: a column is always sent if its name or label suggests a crowdsourcing platform ID — an exact name of `workerid`, or a name/label containing "prolific" or "mturk".
 - **Datetime columns** are always sent.
-- **Possible GPS coordinates**: numeric columns are sent if every value is within ±180 with at least 3 decimal places — unless more than 10% of the (non-zero) values fall between −6.5 and 4.7, a range with almost no landmass, which instead suggests another kind of numeric variable such as a standardized index and is skipped.
+- **Possible GPS coordinates**: numeric columns are sent if every value is within ±180 with at least 3 decimal places.
 - **Small numeric values** (maximum absolute value under 1,000) are skipped — covers Likert-scale items, ages, and simple counts.
 - **Large floats with real decimals** (maximum ≥1,000 but not a whole number) are skipped.
 - **Large integers** (maximum ≥1,000, no real decimals) are sent — possible phone numbers, IDs, or zip codes.
