@@ -1,0 +1,4 @@
+# Optional dependencies — only needed if you switch llm_client's provider away from the default 'ollama'.
+# Install with: pip install -r requirements-optional.txt
+anthropic  # provider='anthropic'
+openai     # provider='openai'

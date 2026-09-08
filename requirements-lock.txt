@@ -1,0 +1,18 @@
+# Exact versions this project was developed and tested against (Python 3.13).
+# Not used by default — requirements.txt uses minimum versions instead so a
+# normal install never downgrades packages you already have for other projects.
+# Fall back to this file only if something breaks and you want to reproduce
+# the exact known-working environment:
+#   pip install -r requirements-lock.txt
+chardet==7.6.0
+numpy==2.5.2
+odfpy==1.4.1
+openpyxl==3.1.5
+pandas==3.0.5
+py7zr==1.1.3
+pyreadr==0.5.6
+pyreadstat==1.3.6
+rdata==1.1.0
+requests==2.34.2
+scipy==1.18.1
+xlrd==2.0.2
