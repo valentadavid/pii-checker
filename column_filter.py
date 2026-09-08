@@ -10,9 +10,7 @@
 #   - Boolean columns are otherwise skipped (never PII)
 #   - Datetime columns are always checked (could be birthdays etc.)
 #   - Numeric columns are checked if:
-#       - possible GPS coordinates (abs value <= 180, >= 3 decimal places) — but excluded if
-#         >10% of values fall in -6.5 to 4.7 (no major landmass there), since that pattern
-#         more likely indicates a standardized index/z-score than real coordinates
+#       - possible GPS coordinates (abs value <= 180, >= 3 decimal places)
 #       - large integers (abs value >= 1000 (i.e. have at least 4 digits), no real decimals)
 #   - String columns are checked if max length >= 4
 #        - exclude clearly categorical data  - each unique value has at least 10 observations AND data have maximum of 20 unique values AND n_unique/n_observations <0.1
@@ -86,9 +84,6 @@ def is_candidate_column(series: pd.Series, label: str = None) -> tuple[bool, str
 
         # 1) GPS check — within coordinate bounds and enough precision
         if max_val <= 180 and max_decimals >= 3:
-            exclusion_band = ((non_null >= -6.5) & (non_null <= 4.7) & (non_null != 0)).mean() #no land mass there so we can exclude variables with significant proportion of values there
-            if exclusion_band > 0.10:
-                return False, f"likely standardized index or similar ({exclusion_band:.0%} of values in -6.5–4.7 band)"
             return True, f"possible GPS coordinates (max={max_val}, decimals={max_decimals})"
 
         # 2) Small values — likert, counts etc.
