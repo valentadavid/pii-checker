@@ -54,6 +54,10 @@ import tempfile
 import datetime
 import time
 import pandas as pd
+from copy import copy
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 from loader import load_data
 from column_filter import is_candidate_column, find_gps_candidates
 from column_checker import check_column, sanitize_for_excel
@@ -242,20 +246,117 @@ def _build_overview(metadata) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def save_results(results, issues, output_path, metadata=None):
+# Results sheet order: checked columns by evaluation (unexpected labels after not_pii),
+# then columns not checked (one row per file/sheet), then files not checked.
+_RESULTS_ORDER = ['error', 'direct_pii', 'possible_indirect', 'internal_id', 'not_pii']
+_RESULTS_FIELDS = ['file', 'sheet', 'col_name', 'evaluation', 'reasoning']
+
+# load_data() return value -> why the file was not checked
+_NOT_LOADED_REASONS = {
+    'skipped'    : 'not a data file',
+    'unsupported': 'data format not supported',
+}
+
+
+def _with_dup_note(reason, duplicate_of):
+    return f"{reason} (NOTE: duplicate of {duplicate_of})" if duplicate_of else reason
+
+
+def _build_results(results, skipped_cols, skipped_files) -> pd.DataFrame:
+    """One row per checked column, per file/sheet with unchecked columns, and per unchecked file."""
+    checked = sorted(results, key=lambda r: _RESULTS_ORDER.index(r['evaluation'])
+                     if r['evaluation'] in _RESULTS_ORDER else len(_RESULTS_ORDER))
+    rows = [{'file': r.get('file', ''), 'sheet': r.get('sheet', '—'), 'col_name': r.get('col_name', ''),
+             'evaluation': r['evaluation'],
+             'reasoning': _with_dup_note(r.get('reasoning', ''), r.get('duplicate_of', ''))}
+            for r in checked]
+    rows += [{'file': s['file'], 'sheet': s['sheet'], 'col_name': ', '.join(map(str, s['columns'])),
+              'evaluation': 'columns not checked',
+              'reasoning': _with_dup_note(f"{len(s['columns'])} column(s) filtered out as unlikely PII",
+                                          s['duplicate_of'])} for s in skipped_cols]
+    rows += [{'file': f['file'], 'sheet': '—', 'col_name': '', 'evaluation': 'file not checked',
+              'reasoning': _with_dup_note(f['reason'], f['duplicate_of'])} for f in skipped_files]
+    return pd.DataFrame(rows, columns=_RESULTS_FIELDS)
+
+
+# Row fill (and font colour) per evaluation on the Results/Detail sheets
+_EVALUATION_STYLES = {
+    'error'              : ('C00000', 'FFFFFF'),
+    'direct_pii'         : ('FFD9D9', None),
+    'possible_indirect'  : ('FFEFC2', None),
+    'internal_id'        : ('DDF2DD', None),
+    'not_pii'            : ('DCE8F7', None),
+    'columns not checked': ('EEEEEE', None),
+    'file not checked'   : ('D4D4D4', None),
+}
+
+
+def _set_font(cell, **attrs):
+    """Changes only the given font attributes, keeping the cell's font name and size."""
+    font = copy(cell.font)
+    for key, value in attrs.items():
+        setattr(font, key, value)
+    cell.font = font
+
+
+def _style_sheet(ws, evaluation_header):
+    """Bold header row; colour the evaluation column by its value.
+    Colours use conditional formatting rather than cell styles: styled cells lose
+    LibreOffice's automatic full-height display of multi-line values (e.g. tabulation)."""
+    header = [c.value for c in ws[1]]
+    for cell in ws[1]:
+        _set_font(cell, bold=True)
+    if evaluation_header not in header or ws.max_row < 2:
+        return
+    evaluation_col = get_column_letter(header.index(evaluation_header) + 1)
+    cell_range = f"{evaluation_col}2:{evaluation_col}{ws.max_row}"
+    for evaluation, (fill, font_color) in _EVALUATION_STYLES.items():
+        ws.conditional_formatting.add(cell_range, FormulaRule(
+            formula=[f'${evaluation_col}2="{evaluation}"'],
+            fill=PatternFill('solid', start_color=fill, end_color=fill, bgColor=fill),
+            font=Font(color=font_color) if font_color else None))
+
+
+def _fit_columns_before(ws, stop_header, max_width=40):
+    """Widens every column left of stop_header to its longest entry, capped at max_width."""
+    for cells in ws.iter_cols():
+        if cells[0].value == stop_header:
+            break
+        width = max(len(str(c.value)) for c in cells if c.value is not None)
+        ws.column_dimensions[cells[0].column_letter].width = min(width, max_width) + 2
+
+
+def _format_key_column(ws):
+    """Bold first column, widened to fit its longest entry."""
+    width = 0
+    for (cell,) in ws.iter_rows(max_col=1):
+        _set_font(cell, bold=True)
+        width = max(width, len(str(cell.value or '')))
+    ws.column_dimensions['A'].width = width + 3  # bold text runs a little wider
+
+
+def save_results(results, issues, output_path, metadata=None, skipped_cols=(), skipped_files=()):
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         if metadata:
-            _build_overview(metadata).to_excel(writer, sheet_name='Overview', index=False)
+            _build_overview(metadata).to_excel(writer, sheet_name='Overview', index=False, header=False)
+            _format_key_column(writer.sheets['Overview'])
+        _build_results(results, skipped_cols, skipped_files).to_excel(
+            writer, sheet_name='Results', index=False)
         if results:
-            pd.DataFrame(results).to_excel(writer, sheet_name='Results', index=False)
+            pd.DataFrame(results).to_excel(writer, sheet_name='Detail', index=False)
         else:
             pd.DataFrame([{'message': 'No variables were evaluated'}]).to_excel(
-                writer, sheet_name='Results', index=False)
+                writer, sheet_name='Detail', index=False)
+        _style_sheet(writer.sheets['Results'], 'evaluation')
+        _fit_columns_before(writer.sheets['Results'], 'reasoning')
+        _style_sheet(writer.sheets['Detail'], 'evaluation')
+        _fit_columns_before(writer.sheets['Detail'], 'reasoning')
         if issues:
             pd.DataFrame(issues).to_excel(writer, sheet_name='Issues', index=False)
         if metadata:
             pd.DataFrame({'key': list(metadata), 'value': list(metadata.values())}).to_excel(
-                writer, sheet_name='Metadata', index=False)
+                writer, sheet_name='Metadata', index=False, header=False)
+            _format_key_column(writer.sheets['Metadata'])
     logger.info("Results saved to %s", output_path)
 
 
@@ -386,6 +487,10 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
 
         results = []
         primary_results = {}
+        skipped_cols = []    # per file/sheet: columns the filter left out
+        skipped_files = []   # files never loaded as data
+        primary_skipped_cols = {}
+        primary_not_loaded = {}
         n_data_files = 0
 
         # --- Step 7: first pass — process primaries ---
@@ -397,10 +502,14 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
             loaded = load_data(file_path)
 
             if not loaded or isinstance(loaded, str):
+                reason = _NOT_LOADED_REASONS.get(loaded, 'failed to load or empty')
+                primary_not_loaded[file_path] = reason
+                skipped_files.append({'file': rel_path, 'reason': reason, 'duplicate_of': ''})
                 continue
 
             n_data_files += 1
             file_results = []
+            file_skipped_cols = []
 
             for fp, sheet_name, df, labels, nrows in loaded:
 
@@ -411,6 +520,7 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
                     gps_candidates = {}
 
                 candidates = []
+                filter_errors = set()
                 n_columns_total += len(df.columns)
                 for col in df.columns:
                     try:
@@ -423,6 +533,7 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
                             candidates.append((col, label, filter_reason, False))
                     except Exception as e:
                         logger.error("Skipping column '%s' in %s — filter error: %s", col, rel_path, e)
+                        filter_errors.add(col)
                         label = labels.get(col, col) if labels else col
                         err_row = {
                             'file': rel_path, 'sheet': sheet_name or '—',
@@ -432,6 +543,15 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
                         }
                         file_results.append(err_row)
                         results.append(err_row)
+
+                candidate_cols = {c[0] for c in candidates}
+                filtered_out = [c for c in df.columns
+                                if c not in candidate_cols and c not in filter_errors]
+                if filtered_out:
+                    row = {'file': rel_path, 'sheet': sheet_name or '—',
+                           'columns': filtered_out, 'duplicate_of': ''}
+                    file_skipped_cols.append(row)
+                    skipped_cols.append(row)
 
                 n_candidates = len(candidates)
                 n_columns_candidate += n_candidates
@@ -478,10 +598,12 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
                             tracker.record()
 
             primary_results[file_path] = file_results
+            primary_skipped_cols[file_path] = file_skipped_cols
 
             if results:
                 _update_metadata(files, n_data_files, n_duplicates, results)
-                save_results(results, issue_collector.issues, output_path, metadata=metadata)
+                save_results(results, issue_collector.issues, output_path, metadata=metadata,
+                             skipped_cols=skipped_cols, skipped_files=skipped_files)
 
         # --- Step 8: second pass — copy results for duplicates ---
         for file_path in files:
@@ -499,12 +621,19 @@ def run_package(folder_path, output_path, central_output_path=None, temp_base=No
                     dup_row['file']         = rel_path
                     dup_row['duplicate_of'] = rel_primary
                     results.append(dup_row)
+                for skipped in primary_skipped_cols[primary]:
+                    skipped_cols.append({**skipped, 'file': rel_path, 'duplicate_of': rel_primary})
+            elif primary in primary_not_loaded:
+                skipped_files.append({'file': rel_path, 'reason': primary_not_loaded[primary],
+                                      'duplicate_of': rel_primary})
 
         # --- Step 9: final save ---
         _finalize_metadata(files, n_data_files, n_duplicates, results)
-        save_results(results, issue_collector.issues, output_path, metadata=metadata)
+        save_results(results, issue_collector.issues, output_path, metadata=metadata,
+                     skipped_cols=skipped_cols, skipped_files=skipped_files)
         if central_output_path:
-            save_results(results, issue_collector.issues, central_output_path, metadata=metadata)
+            save_results(results, issue_collector.issues, central_output_path, metadata=metadata,
+                         skipped_cols=skipped_cols, skipped_files=skipped_files)
 
         # --- build summary ---
         counts = _count_results(results, issue_collector.issues)

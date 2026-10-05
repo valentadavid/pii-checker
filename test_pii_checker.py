@@ -124,11 +124,11 @@ def test_save_results_writes_metadata_sheet(tmp_path):
     save_results([{'file': 'a.csv', 'evaluation': 'not_pii'}], [], str(out),
                  metadata={'version': '9.9.9', 'started': '2026-01-01 00:00:00',
                            'package_name': 'pkg1', 'n_direct_pii': 2})
-    sheets = pd.read_excel(out, sheet_name=None)
-    assert list(sheets) == ['Overview', 'Results', 'Metadata']
-    meta = dict(zip(sheets['Metadata']['key'], sheets['Metadata']['value']))
+    sheets = pd.read_excel(out, sheet_name=None, header=None)
+    assert list(sheets) == ['Overview', 'Results', 'Detail', 'Metadata']
+    meta = dict(zip(sheets['Metadata'][0], sheets['Metadata'][1]))
     assert meta['version'] == '9.9.9'
-    overview = dict(zip(sheets['Overview']['Metric'], sheets['Overview']['Value']))
+    overview = dict(zip(sheets['Overview'][0], sheets['Overview'][1]))
     assert overview['Package'] == 'pkg1'
     assert overview['Flagged: direct PII'] == 2
     assert 'Tool version' not in overview  # version lives in Metadata only
